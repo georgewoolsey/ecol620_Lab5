@@ -41,6 +41,7 @@ library(scales)
 library(latex2exp)
 # visualization
 library(kableExtra)
+library(ggtext)
 # spatial analysis
 library(terra)
 library(pgirmess) #for simple correlograms
@@ -63,10 +64,9 @@ Moran's I is a spatial pearson's correlation (-1 to 1) of metric with itself. ho
 Semivariogram - variance of metric is low at close distances (b/c values are similar) but higher at further distances because the variance is due to factors other than spatial dependence
 emperical semivariogram is based on values of variance at specific points (range/distance). theoretical semivariogram is a continuous function (model) fit to the data and can use different methods (e.g. gaussian)
 
-
+Kriging is only using the x-y values of the data to spatially interpolate; not using any other data
 
 ```
-
 
 ---
 
@@ -77,30 +77,27 @@ emperical semivariogram is based on values of variance at specific points (range
 Describe the difference in the use of Moran’s I and Ripley’s K (or L-function). (3 pts)
 
 <span style="color: teal;">
-Ripley’s K and the standardized L function quantify the aggregation of points on a landscape within a circular radius from a given point to determine if there is a significant difference between the observed pattern of points and a completely random distribution of points (Complete Spatial Randomness [CSR]). Moran’s I is used to quantify spatial dependence, or the similarity of a variable as a function of spatial location and/or geographic distance ([Fletcher & Fortin 2018](https://link.springer.com/book/10.1007/978-3-030-01989-1)). 
-
-a Pearson’s cor coefficient computed for one variable against itself according to increasing distances among sampling locations (d)
-
-Similarity in a response variable as a function of spatial location/distance
-
-
+Ripley’s K and the standardized L function quantify the aggregation of points on a landscape within a circular radius from a given point to determine if there is a significant difference between the observed pattern of points and a completely random distribution of points (Complete Spatial Randomness [CSR]). Moran’s I is used to quantify spatial dependence, or the similarity of a variable as a function of spatial location and/or geographic distance ([Fletcher & Fortin 2018](https://link.springer.com/book/10.1007/978-3-030-01989-1)). Moran’s I is a Pearson’s coefficient (range -1 to 1) for one variable against itself (autocorrelation) according to increasing distances among sampling locations.
 </span>
 
 ## Question 2
 
 Describe the difference between a correlogram and semivariogram. How do the scales compare? (3 pts)
 
+<span style="color: teal;">
+Correlograms and semivariograms are complementary approaches used to quantify spatial dependence. Correlograms plot a correlation coefficient such as Moran's I (autocorrelation of one variable) as a function of distance. Semivariograms plot semivariance (a "stabilized" measure of variance) as a function of distance. A correlation coefficient, used in a correlogram, is constrained between -1 (perfect negative correlation) and 1 (perfect positive correlation) with values close to 0 indicating weak correlation. Semivariance, used in a semivariogrm, is in the same units as the data (e.g. meters) with small values (close to 0) indicating strong spatial covariance and large values indicating less spatial covariance (i.e. weak or no spatial pattern).
+</span>
 
 ## Question 3
 
 Label the following semivariogram. (4 pts) 
 
-![](/Users/kylehorton/Desktop/ECOL_620/Course_materials/Week5/Lab5/code_for_lab5/semivariogram.png){width=50%}
+![](../data/semiv.png){width=50%}
 
-a. 
-b. 
-c. 
-d. 
+a. Nugget 
+b. Sill
+c. Partial Sill
+d. Range
 
 ---
 
@@ -108,9 +105,74 @@ d.
 
 ## Question 4: Correlogram (Moran’s I)
 
-Generate a single plot containing the values from the two methods employed to generate correlograms (pgirmess and ncf, e.g., see figure 5.5a from Fletcher and Fortin). Also see the example of Canvas (Question 4 plot). Be sure to use 2/3rd maximum distance to restrict the values. Color the points based on p-value significance (e.g., red<0.05, black>0.05). At what distance(s) do you see spatial autocorrelation? Use ggplot to generate the graphic. (7 pts). 
+Generate a single plot containing the values from the two methods employed to generate correlograms (`pgirmess::correlog` and `ncf`, e.g., see figure 5.5a from Fletcher and Fortin). Also see the example of Canvas (Question 4 plot). Be sure to use 2/3rd maximum distance to restrict the values. Color the points based on p-value significance (e.g., red<0.05, black>0.05). At what distance(s) do you see spatial autocorrelation? Use ggplot to generate the graphic. (7 pts). 
 
-```{r}
+```{r, results='hide'}
+# load data
+cactus_df <- read.csv('../data/cactus_matrix.csv', header=T)
+#  Computes Moran's coefficients on distance classes
+# pgirmess::correlog
+  cactus_morans_temp <- pgirmess::correlog(
+      coords = cactus_df %>% dplyr::select(x, y)
+      , z = cactus_df$Height
+      , method = "Moran"
+      , nbclass = 14
+      , alternative = "two.sided"
+    ) %>%
+    as.data.frame() %>% 
+    dplyr::mutate(method = "pgirmess::correlog")
+# ncf::correlog
+  cactus_morans_full <- ncf::correlog(
+      x = cactus_df$x
+      , y = cactus_df$y
+      , z = cactus_df$Height
+      , increment = 5
+      , resamp = 99
+    )[1:5] %>% 
+    as.data.frame() %>% 
+    dplyr::mutate(method = "ncf::correlog") %>% 
+    dplyr::rename(
+      dist.class = mean.of.class
+      , coef = correlation
+      , p.value = p
+    ) %>% 
+    dplyr::select(names(cactus_morans_temp)) %>% 
+    # combine with alternative method
+    rbind(cactus_morans_temp) %>% 
+    dplyr::mutate(
+      signif = ordered(
+        ifelse(p.value <= 0.05, 1, 0)
+        , levels = c(0, 1)
+        , labels = c("p-value>0.05", "p-value<0.05")
+      )
+    )
+remove(cactus_morans_temp)
+# plot
+ggplot(
+    data = cactus_morans_full %>% 
+      dplyr::filter(dist.class <= max(cactus_morans_full$dist.class)*(2/3))
+    , mapping = aes(x = dist.class, y = coef, group = method)
+  ) +
+  geom_hline(mapping = aes(yintercept = 0), color = "gray11", linetype = "dashed") +
+  geom_line(color = "gray33", size = 1.2) +
+  geom_point(mapping = aes(color = signif, shape = method), size = 2.5) +
+  scale_color_manual(values = c("black", "red")) +
+  labs(
+    subtitle = "<span>
+        <span style='color:red;'><b><i>red</i></b></span> = p-value<0.05 | 
+        <span style='color:black;'><b><i>black</i></b></span> = p-value>0.05
+        </span>"
+    , y = "Moran's I"
+    , x = "Distance (m)"
+  ) +
+  theme_bw() +
+  theme(
+    plot.subtitle = ggtext::element_markdown(size = 10)
+    , legend.position = c(0.5, 0.93)
+    , legend.direction = "horizontal"
+    , legend.title = element_blank()
+  ) + 
+  guides(color = "none")
 
 ```
 
