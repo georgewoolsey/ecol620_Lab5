@@ -1,0 +1,238 @@
+---
+title: "Lab 5 - Spatial Dependence"
+author: "ECOL 620 - Applications in Landscape Ecology"
+date: "Spring 2023"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This lab assignment highlights the use of a number of R packages to explore differing techniques for assessing spatial dependence. Download Laboratory #5 materials and store files locally on your computer. Read “Fletcher_2018_CH5” and open “lab_5_practice.Rmd” in R. 
+
+```{r}
+#load packages
+library(pgirmess)         #for simple correlograms; version 1.6.9 used
+library(ncf)              #for spline correlograms; version 1.2-5 used
+library(spdep)            #for general correlograms; version 0.7-8 used
+library(gstat)            #for variograms/kriging; version 1.1-6 used
+library(terra)            #for raster covariate data; version 2.6-7 used
+```
+
+
+###############################################
+# Correlograms
+###############################################
+
+```{r}
+#load data
+matrix = read.csv('~/Desktop/ECOL_620/Course_materials/Week5/Lab5/data_for_lab5/cactus_matrix.csv', header=T)
+```
+
+```{r}
+#inspect
+head(matrix)
+```
+
+
+```{r}
+#plot
+plot(matrix[,"y"] ~ matrix[,"x"],
+     pch=21, cex=1.2,
+     bg=gray.colors(12)[cut(matrix[,"Height"], breaks = 12)])
+```
+
+
+```{r}
+#plot distribution of vegetation height
+hist(matrix[,"Height"], xlab="Vegetation height (cm)",
+     main="histogram of vegetation height")
+```
+
+
+```{r}
+#calculate distance matrix
+coords = cbind(matrix$x, matrix$y)
+colnames(coords) = c("x", "y")
+distmat = as.matrix(dist(coords))
+```
+
+
+```{r}
+#inspect
+dim(distmat)
+max(distmat)
+```
+
+
+```{r}
+#Maximum distance to consider in correlogram/variogram (~1/2 to 2/3 total dist)
+maxdist = 2/3*max(distmat)
+maxdist
+```
+
+
+#--------------------------------------#
+# Correlogram with pgirmess
+#--------------------------------------#
+
+```{r}
+correlog.pgirmess = pgirmess::correlog(coords, matrix$Height, method="Moran",
+                            nbclass=14, alternative = "two.sided")
+```
+
+
+```{r}
+#Moran and P values for each distance class
+round(correlog.pgirmess,2)
+```
+
+
+```{r}
+#plot
+plot(correlog.pgirmess[,1], correlog.pgirmess[,2],
+     xlab="Distance (m)", ylab="Moran's I", col = ifelse(correlog.pgirmess[,3] < 0.05,'red','black'), pch=19)
+abline(h=0)
+```
+
+
+#--------------------------------------#
+# Correlograms with ncf 
+#--------------------------------------#
+
+```{r}
+#Correlogram with non-parameteric test of significance
+correlog.ncf = ncf::correlog(x = matrix$x, y = matrix$y, z = matrix$Height,
+                         increment=5, resamp=99)
+
+#plot
+plot(correlog.ncf)
+abline(h=0)
+```
+
+
+```{r}
+#Spline correlogram with 95% pointwise bootstrap confidence intervals
+spline.corr = spline.correlog(x = matrix$x, y = matrix$y, z = matrix$Height,
+                               xmax = maxdist, resamp=99, type="boot")
+
+#plot
+plot(spline.corr)
+```
+
+
+#############################################
+# Variograms in gstat
+#############################################
+
+```{r}
+gstat.veg = matrix
+coordinates(gstat.veg) = ~x + y
+```
+
+
+```{r}
+#Empirical semivariogram
+emp.gstat = variogram(Height ~ 1, cutoff=maxdist, width=3, gstat.veg)
+```
+
+
+```{r}
+#plot variogram
+plot(emp.gstat)
+```
+
+
+#----------------------------------#
+# Anisotropy check
+#----------------------------------#
+
+```{r}
+#Directional variogram in gstat
+emp4.gstat = variogram(Height ~ 1, cutoff=maxdist, alpha=c(0,45,90,135), gstat.veg)
+```
+
+
+```{r}
+#plot directional variogram
+plot(emp4.gstat)
+```
+
+
+#--------------------------------------------------#
+# Model-based variograms with least squares in gstat
+#--------------------------------------------------#
+
+```{r}
+#inspect models that gstat can fit
+vgm()#fits more models than geoR
+show.vgms()#plots examples of the various variograms
+```
+
+
+```{r}
+#Spherical variogram
+sph.gstat = fit.variogram(emp.gstat, vgm("Sph")) 
+```
+
+
+```{r}
+#Exponential variogram
+exp.gstat = fit.variogram(emp.gstat, vgm("Exp"))
+```
+
+
+```{r}
+#inspect
+exp.gstat
+sph.gstat
+```
+
+
+```{r}
+#plot
+plot(emp.gstat, exp.gstat)
+plot(emp.gstat, sph.gstat)
+```
+
+
+#################################################
+# Kriging and interpolation in gstat
+#################################################
+
+```{r}
+new.grid.1m.gstat = expand.grid(x=seq(0,max(matrix$x),.5), y=seq(0,max(matrix$y),.5)) #need labels for coords
+```
+
+
+```{r}
+#convert to sp object
+gridded(new.grid.1m.gstat) = ~x + y
+```
+
+
+```{r}
+krig.gstat = krige(Height ~ 1, gstat.veg, new.grid.1m.gstat, model = sph.gstat)
+```
+
+
+```{r}
+#Inverse distance weighting in gstat
+idw.gstat = idw(Height ~ 1, gstat.veg, new.grid.1m.gstat) #idp-the power used; default power=2
+```
+
+
+```{r}
+plot(krig.gstat)
+```
+
+
+```{r}
+plot(idw.gstat)
+```
+
+
+

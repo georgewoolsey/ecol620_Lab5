@@ -1,0 +1,134 @@
+---
+title: "Lab 5 - Spatial Dependence"
+subtitle: "ECOL 620 - Applications in Landscape Ecology"
+author: "First Last"
+date: "MM/DD/YYYY"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Rules
+1. Using the provided R Markdown template, answer all questions and show your R code where necessary. Note, some questions are just plain text written answers.
+2. Complete your assignment using the R markdown file and submit individual assignments to Canvas. Knit your script and submit an .html file on Canvas. Please use  the following naming convention: lab5_firstname_lastname.html (ex. lab5_kyle_horton.html).  Note, we will not grade labs in any other format.
+
+
+#################################################################################
+
+### Question 1
+Describe the difference in the use of Moran’s I and Ripley’s K (or L-function). (3 pts)
+
+### Question 2
+Describe the difference between a correlogram and semivariogram. How do the scales compare? (3 pts)
+
+
+### Question 3
+Label the following semivariogram. (4 pts) 
+
+![](/Users/kylehorton/Desktop/ECOL_620/Course_materials/Week5/Lab5/code_for_lab5/semivariogram.png){width=50%}
+
+a. 
+b. 
+c. 
+d. 
+
+
+#################################################################################
+# Cactus data: Correlogram (Moran’s I)
+
+### Question 4
+Generate a single plot containing the values from the two methods employed to generate correlograms (pgirmess and ncf, e.g., see figure 5.5a from Fletcher and Fortin). Also see the example of Canvas (Question 4 plot). Be sure to use 2/3rd maximum distance to restrict the values. Color the points based on p-value significance (e.g., red<0.05, black>0.05). At what distance(s) do you see spatial autocorrelation? Use ggplot to generate the graphic. (7 pts). 
+
+```{r}
+
+```
+
+#################################################################################
+# Cactus data: Semivariogram
+
+### Question 5
+Examine the empirical semivariogram created using gstat. Estimate the nugget, sill, and range. (3 pts) 
+
+```{r}
+
+```
+
+### Question 6
+Do you see any cause for concern regarding anisotropy? (3 pts)
+
+```{r}
+
+```
+
+
+### Question 7
+Plot the empirical and spherical theoretical semivariogram (through gstat). Add three colored lines to denote the nugget (blue), sill (green), and range (red). See example on Canvas. (6 pts)
+
+Hint: the variogramLine() function is useful in extracting the theoretical values. 
+
+```{r}
+#Use the following code to form the base of your plot:
+#ggplot()+
+#geom_point(data=emp.gstat, aes(x=dist, y=gamma, size=np))
+```
+
+
+### Question 8 
+Contrast the use of inverse distance weighting interpolation and kriging (using either spherical or exponential). Which method yields a better interpolation? A visual assessment is fine at this stage. (4 pts)
+
+```{r}
+
+```
+
+
+#################################################################################
+# Elevation Data
+
+### Question 9
+Use the code on Lines 244 to 276 to download elevation data and prepare the raster for the following kriging exercise. First, crop the extent and aggregate with the supplied code. Next, take a random selection of 500 points from the elevation surface. Using the code and knowledge gained through this lab, use kriging to interpolate elevation across the landscape using the 500 randomly selected points. (17 pts)
+
+a.	What model fits best to the empirical variogram? Which did you try? 
+
+b.	Provide the correlation between your best kriged model predictions and the known elevation. 
+
+c.	Does your model perform better than inverse distance weighting? Provide the correlation between inverse distance weighting predictions and the known elevation. 
+d.	Make a four-panel plot that includes the randomly sampled points (shaded by elevation) and raster elevations from kriging, inverse distance weighting, and the truth. See example on Canvas. Use ggplot to generate the graphic. 
+
+```{r}
+#download elevation tif
+#change the directory as needed
+#srtm <- rast("/Users/kylehorton/Desktop/ECOL_620/Course_materials/Week5/Lab5/lab_5/data_for_lab5/srtm_15_05.tif")
+#e <- ext(-107.5, -107, 37.5, 38)
+#srtm=crop(srtm, e)
+#plot(srtm)
+#aggregate to reduce computation
+#srtm = aggregate(srtm, fact=10, fun=mean) #mean value
+#plot(srtm)
+```
+
+
+```{r}
+#extract 500 points of elevation, randomly drawn
+#set.seed(2020)
+#srtm_pts=as.data.frame(spatSample(srtm, 500,method="random", xy=T))
+#colnames(srtm_pts)[3]="elevation"
+#head(srtm_pts)
+#plot(srtm)
+#plot(srtm_pts$x,srtm_pts$y)
+```
+
+
+```{r}
+#Create grid with intervals of 0.008333333 degree)
+#ext(srtm)
+#res(srtm)
+#e <- ext(srtm)
+#new.grid<- rast(e, resolution=res(srtm), val=1)
+#new.grid=as.data.frame(new.grid, xy=TRUE)
+#new.grid=new.grid[,1:2]
+```
+
+
+ 
