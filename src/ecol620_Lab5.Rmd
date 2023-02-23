@@ -455,7 +455,6 @@ grid_1m <- expand.grid(
   x = seq(from = 0, to = max(cactus_df$x), by = .5)
   , y = seq(from = 0, to = max(cactus_df$y), by = .5)
 )
-
 #convert to sp object
 sp::gridded(grid_1m) = ~x + y
 # ordinary kriging
@@ -540,8 +539,13 @@ cowplot::plot_grid(
 ```
 
 <span style="color: teal;">
-As shown above, the two spatial interpolation methods — inverse distance weighting and ordinary kriging using a spherical model — provide very similar predictions of vegetation height. The similar results were highly influenced by the dense, regular sample data collection and the approaches might exhibit less similarities in predictions given sparse and/or irregularly spaced sampling.
+As shown above, the two spatial interpolation methods — inverse distance weighting and ordinary kriging using a spherical model — provide very similar predictions of vegetation height. The ordinary kriging estimates of vegetation height feature smoother transitions between height classes compared to the inverse distance weighting estimates. The dense, regular sampling of cactus height data in this study influenced the similar results. The two approaches might exhibit less similarities in predictions given sparse and/or irregularly spaced sampling.
 </span>
+
+```{r, include=FALSE, warning=FALSE, message=FALSE, results='hide'}
+remove(list = ls())
+gc()
+```
 
 
 ---
@@ -552,55 +556,429 @@ As shown above, the two spatial interpolation methods — inverse distance weigh
 
 Use the code on Lines 244 to 276 to download elevation data and prepare the raster for the following kriging exercise. First, crop the extent and aggregate with the supplied code. Next, take a random selection of 500 points from the elevation surface. Using the code and knowledge gained through this lab, use kriging to interpolate elevation across the landscape using the 500 randomly selected points. (17 pts)
 
+### Load data
+
+```{r}
+########################
+# load data
+########################
+#load elevation tif
+srtm <- terra::rast("../data/srtm_15_05.tif")
+e <- terra::ext(-107.5, -107, 37.5, 38)
+srtm <- terra::crop(srtm, e)
+# aggregate to reduce computation
+srtm <- terra::aggregate(srtm, fact=10, fun=mean)
+########################
+# sample 500 points
+########################
+#extract 500 points of elevation, randomly drawn
+set.seed(2020)
+srtm_pts_df <- terra::spatSample(srtm, size = 500, method="random", xy=TRUE) %>% 
+  as.data.frame(xy=TRUE) %>% 
+  dplyr::rename(elevation=3) %>% 
+  dplyr::mutate(is_sample = 1)
+# create spatial coordinates
+srtm_pts_sp <- srtm_pts_df
+sp::coordinates(srtm_pts_sp) <- ~x + y
+########################
+# create grid to interpolate elevation
+########################
+#Create grid with intervals of 0.008333333 degree)
+e <- terra::ext(srtm)
+# create raster with same extent as elev.tif then convert to df
+estimation_grid <- terra::rast(e, resolution = terra::res(srtm), val = 1) %>% 
+  as.data.frame(xy=TRUE) %>% 
+  dplyr::select(x, y)
+sp::gridded(estimation_grid) = ~x + y
+```
+
 ### part a)
 
 What model fits best to the empirical variogram? Which did you try? 
+
+#### Elevation Semivariance
+
+```{r}
+#  Computes Moran's coefficients on distance classes
+# pgirmess::correlog
+  elev_morans <- pgirmess::correlog(
+      coords = srtm_pts_df %>% dplyr::select(x, y)
+      , z = srtm_pts_df$elevation
+      , method = "Moran"
+      , nbclass = 14
+      , alternative = "two.sided"
+    ) %>%
+    as.data.frame() %>% 
+    dplyr::mutate(
+      method = "pgirmess::correlog"
+      , signif = ordered(
+        ifelse(p.value <= 0.05, 1, 0)
+        , levels = c(0, 1)
+        , labels = c("p-value>0.05", "p-value<0.05")
+      )
+    )
+#Maximum distance to consider in correlogram/variogram (~1/2 to 2/3 total dist)
+  maxdist <- max(elev_morans$dist.class)*(2/3)
+  # plot
+  if(FALSE){
+    ggplot(
+        data = elev_morans %>% dplyr::filter(dist.class<maxdist)
+        , mapping = aes(x = dist.class, y = coef)
+      ) + 
+      geom_point(mapping=aes(color=signif)) +
+      geom_hline(mapping = aes(yintercept=0), linetype="dashed") +
+      labs(
+        x = "Distance (deg.)"
+        , y = "Moran's I"
+      ) +
+      theme_bw() +
+      theme(
+        legend.position = "top"
+        , legend.title = element_blank()
+      )
+    
+  }
+
+#Empirical semivariogram
+  empirical_semivar <- gstat::variogram(
+    object = elevation ~ 1
+    , cutoff = maxdist
+    , width = sd(elev_morans$dist.class)*0.2
+    , data = srtm_pts_sp
+    ) %>% 
+    dplyr::arrange(dist)
+  # PLOT
+  # plot(empirical_semivar)
+#theoretical semivariogram
+plt_vgram_fn <- function(vgm_sht = "Sph") {
+  fit_vgram <- gstat::fit.variogram(empirical_semivar, gstat::vgm(vgm_sht))
+  theoretical_semivar <- gstat::variogramLine(fit_vgram, maxdist = maxdist)
+# plot(theoretical_semivar)
+# get the range sill and nugget
+  range_temp <- sum(fit_vgram$range)
+  nugget_temp <- fit_vgram$psill[1]
+  sill_temp <- sum(fit_vgram$psill)
+# plot
+  plt <- ggplot( ) +
+    geom_segment(mapping = aes(
+      x = range_temp
+      , y = sill_temp
+      ,  xend = 0
+      , yend = sill_temp
+      , color = "range"), size = 1
+    ) +
+    geom_segment(mapping = aes(
+      x = range_temp
+      , y = 0
+      , xend = range_temp
+      , yend = sill_temp
+      , color = "sill"), size = 1
+    ) +
+    geom_point(data = empirical_semivar
+      , mapping = aes(x = dist, y = gamma, size = np)
+      , color = "gray33"
+      , size = 1.2
+    ) +
+    geom_line(data = theoretical_semivar
+      , mapping = aes(x = dist, y = gamma, color = "model")
+      , size = 1.2
+    ) +
+    geom_point(mapping = aes(y = nugget_temp, x = 0, color = "nugget"), size = 2, shape = 15) +
+    geom_segment(mapping = aes(
+      x = 0
+      , y = 0
+      , xend = 0
+      , yend = nugget_temp
+      , color = "nugget"), size = 1
+    ) +
+    scale_y_continuous(
+      limits = c(0, max(empirical_semivar$gamma)*1.02)
+      , breaks = scales::extended_breaks(n=6)
+    ) + 
+    scale_x_continuous(limits = c(0, max(empirical_semivar$dist)*1.02)) +
+    scale_color_manual(
+      # nugget (blue), sill (green), and range (red)
+      values = c("gray33", "navy", "firebrick", "forestgreen")
+    ) +
+    labs(
+      y = latex2exp::TeX("Semivariance  $\\hat{\\gamma}$")
+      , x = "Distance (\U00B0)"
+      , subtitle = paste0(
+        gstat::vgm() %>% dplyr::filter(short==vgm_sht) %>% dplyr::pull(long)
+        , " model"
+        )
+    ) +
+    theme_bw() +
+    theme(
+      legend.position = "bottom"
+      , legend.title = element_blank()
+      , axis.text = element_text(size = 6)
+      , legend.text = element_text(size = 6)
+      , plot.subtitle = element_text(size=9)
+    ) +
+    guides(
+      color = guide_legend(override.aes = list(size = 5, shape = ""))
+      , size = "none"
+    )
+    
+  return(plt)
+}
+# plt_list <- c("Exp","Sph","Gau","Exc","Mat","Log","Pow","Spl") %>% 
+plt_list <- c("Sph","Gau", "Exc", "Cir", "Lin", "Pow") %>% 
+  purrr::map(plt_vgram_fn)
+# combine
+cowplot::plot_grid(
+  plotlist = plt_list 
+  , nrow = 2
+)
+```
+
+<span style="color: teal;">
+The figure above displays the `r length(plt_list)` different theoretical models tested for best fit to the empirical variogram. Visual inspection shows that the Spherical model and the Circular model best fit the emperical variogram of elevation data.
+</span>
 
 ### part b)
 
 Provide the correlation between your best kriged model predictions and the known elevation. 
 
+#### Kriging and IDW estimates
+
+```{r, results='hide'}
+# use spherical model
+  bestfit_vgram <- gstat::fit.variogram(empirical_semivar, gstat::vgm("Sph"))
+  besttheoretical_semivar <- gstat::variogramLine(bestfit_vgram, maxdist = maxdist)
+# ordinary kriging
+elev_krig <- gstat::krige(
+   formula = elevation ~ 1
+   , locations = srtm_pts_sp
+   , estimation_grid
+   , model = bestfit_vgram
+)
+# plot(elev_krig)
+#Inverse distance weighting
+elev_idw <- gstat::idw(
+  formula = elevation ~ 1
+  , locations = srtm_pts_sp
+  , estimation_grid
+)
+# get estimated elevation from sample points
+# all points df
+srtm_all_pts_df <- srtm %>% 
+  as.data.frame(xy = T) %>% 
+  dplyr::rename(elevation=3) %>% 
+  # remove sample points
+  dplyr::left_join(
+    srtm_pts_df %>% dplyr::select(x,y,is_sample)
+    , by = c("x"="x", "y"="y")
+  ) %>% 
+  dplyr::filter(is.na(is_sample)) %>% 
+  dplyr::select(-is_sample) %>% 
+  dplyr::mutate(ID=dplyr::row_number()) %>% 
+  # convert to sf
+  sf::st_as_sf(coords = c("x", "y"), crs = terra::crs(srtm))
+# join to estimated
+srtm_all_pts_df <- srtm_all_pts_df %>% 
+  dplyr::left_join(
+    terra::extract(
+        elev_krig %>% stars::st_as_stars() %>% terra::rast()
+        , srtm_all_pts_df %>% terra::vect()
+      ) %>% 
+      dplyr::select(1:2) %>% 
+      dplyr::rename(krig_pred=2)
+    , by = c("ID"="ID")
+  ) %>% 
+  dplyr::left_join(
+    terra::extract(
+        elev_idw %>% stars::st_as_stars() %>% terra::rast()
+        , srtm_all_pts_df %>% terra::vect()
+      ) %>% 
+      dplyr::select(1:2) %>% 
+      dplyr::rename(idw_pred=2)
+    , by = c("ID"="ID")
+  )
+```
+
+#### Kriging Correlation
+
+```{r}
+# correlation
+krig_corr <- stats::cor(srtm_all_pts_df$elevation, srtm_all_pts_df$krig_pred)
+ggplot(data=srtm_all_pts_df) +
+  geom_point(mapping = aes(x=elevation, y=krig_pred)) +
+  geom_abline() +
+  scale_x_continuous(limits = c(
+    min(srtm_all_pts_df$elevation)*0.99
+    , max(srtm_all_pts_df$elevation)*1.01
+    )
+  ) +
+  scale_y_continuous(limits = c(
+    min(srtm_all_pts_df$elevation)*0.99
+    , max(srtm_all_pts_df$elevation)*1.01
+    )
+  ) +
+  labs(
+    x="DEM Elevation (m)"
+    ,y="Kriging Pred. Elevation (m)"
+    , subtitle = paste("Correlation Coefficient = ", round(krig_corr,3))
+  ) +
+  theme_bw()
+```
+
+<span style="color: teal;">
+The best fit model predictions from the kriging method has a correlation with known elevation of **`r round(krig_corr,3)`**.
+</span>
+
+
 ### part c)
 
 Does your model perform better than inverse distance weighting? Provide the correlation between inverse distance weighting predictions and the known elevation. 
+
+#### IDW Correlation
+
+```{r}
+# correlation
+idw_corr <- stats::cor(srtm_all_pts_df$elevation, srtm_all_pts_df$idw_pred)
+ggplot(data=srtm_all_pts_df) +
+  geom_point(mapping = aes(x=elevation, y=idw_pred)) +
+  geom_abline() +
+  scale_x_continuous(limits = c(
+    min(srtm_all_pts_df$elevation)*0.99
+    , max(srtm_all_pts_df$elevation)*1.01
+    )
+  ) +
+  scale_y_continuous(limits = c(
+    min(srtm_all_pts_df$elevation)*0.99
+    , max(srtm_all_pts_df$elevation)*1.01
+    )
+  ) +
+  labs(
+    x="DEM Elevation (m)"
+    ,y="IDW Pred. Elevation (m)"
+    , subtitle = paste("Correlation Coefficient = ", round(idw_corr,3))
+  ) +
+  theme_bw()
+```
+
+<span style="color: teal;">
+The best fit model predictions from the IDW method has a correlation with known elevation of **`r round(idw_corr,3)`**. The kriging estimation method performs better than the IDW method for this data.
+</span>
 
 ### part d)	
 
 Make a four-panel plot that includes the randomly sampled points (shaded by elevation) and raster elevations from kriging, inverse distance weighting, and the truth. See example on Canvas. Use ggplot to generate the graphic. 
 
 ```{r}
-#download elevation tif
-#change the directory as needed
-#srtm <- rast("/Users/kylehorton/Desktop/ECOL_620/Course_materials/Week5/Lab5/lab_5/data_for_lab5/srtm_15_05.tif")
-#e <- ext(-107.5, -107, 37.5, 38)
-#srtm=crop(srtm, e)
-#plot(srtm)
-#aggregate to reduce computation
-#srtm = aggregate(srtm, fact=10, fun=mean) #mean value
-#plot(srtm)
+# random points
+plt_pts <- ggplot(data = srtm_pts_df) +
+  geom_point(mapping = aes(x = x, y = y, color = elevation)) +
+  scale_color_viridis_c(option = "turbo", label = scales::comma) +
+  scale_x_continuous(expand = c(0.01, 0.01)) +
+  scale_y_continuous(expand = c(0.01, 0.01)) +
+  labs(
+    x="Longitude (\U00B0)"
+    ,y="Latitude (\U00B0)"
+    , subtitle = "Sample Points"
+    , color = "Elevation (m)"
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "bottom"
+    , legend.direction = "horizontal"
+    , legend.margin = margin(0,0,0,0)
+    , legend.box.margin = margin(-7,0,2,0)
+    , legend.text = element_text(size = 7, angle = 25, hjust = 0.7)
+    , legend.title = element_text(size = 7)
+    , axis.title = element_text(size = 7)
+    , plot.subtitle = element_text(size=9)
+  )
+# idw
+plt_idw <- elev_idw %>% 
+  stars::st_as_stars() %>% 
+  as.data.frame(xy = TRUE) %>% 
+  dplyr::rename(pred = 3, var = 4) %>% 
+ggplot(.) +
+  geom_raster(mapping = aes(x=x, y=y, fill=pred)) +
+  scale_fill_viridis_c(option = "turbo", label = scales::comma) +
+  scale_x_continuous(expand = c(0.01, 0.01)) +
+  scale_y_continuous(expand = c(0.01, 0.01)) +
+  labs(
+    x="Longitude (\U00B0)"
+    ,y="Latitude (\U00B0)"
+    , subtitle = "Inverse Distance Weighting"
+    , fill = "Elevation (m)"
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "bottom"
+    , legend.direction = "horizontal"
+    , legend.margin = margin(0,0,0,0)
+    , legend.box.margin = margin(-7,0,2,0)
+    , legend.text = element_text(size = 7, angle = 25, hjust = 0.7)
+    , legend.title = element_text(size = 7)
+    , axis.title = element_text(size = 7)
+    , plot.subtitle = element_text(size=9)
+  )
+# krig
+plt_krig <- elev_krig %>% 
+  stars::st_as_stars() %>% 
+  as.data.frame(xy = TRUE) %>% 
+  dplyr::rename(pred = 3, var = 4) %>% 
+ggplot(.) +
+  geom_raster(mapping = aes(x=x, y=y, fill=pred)) +
+  scale_fill_viridis_c(option = "turbo", label = scales::comma) +
+  scale_x_continuous(expand = c(0.01, 0.01)) +
+  scale_y_continuous(expand = c(0.01, 0.01)) +
+  labs(
+    x="Longitude (\U00B0)"
+    ,y="Latitude (\U00B0)"
+    , subtitle = "Kriging"
+    , fill = "Elevation (m)"
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "bottom"
+    , legend.direction = "horizontal"
+    , legend.margin = margin(0,0,0,0)
+    , legend.box.margin = margin(-7,0,2,0)
+    , legend.text = element_text(size = 7, angle = 25, hjust = 0.7)
+    , legend.title = element_text(size = 7)
+    , axis.title = element_text(size = 7)
+    , plot.subtitle = element_text(size=9)
+  )
+# krig
+plt_real <- srtm %>% 
+  stars::st_as_stars() %>% 
+  as.data.frame(xy = TRUE) %>% 
+  dplyr::rename(pred = 3) %>% 
+ggplot(.) +
+  geom_raster(mapping = aes(x=x, y=y, fill=pred)) +
+  scale_fill_viridis_c(option = "turbo", label = scales::comma) +
+  scale_x_continuous(expand = c(0.01, 0.01)) +
+  scale_y_continuous(expand = c(0.01, 0.01)) +
+  labs(
+    x="Longitude (\U00B0)"
+    ,y="Latitude (\U00B0)"
+    , subtitle = "True Elevation"
+    , fill = "Elevation (m)"
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "bottom"
+    , legend.direction = "horizontal"
+    , legend.margin = margin(0,0,0,0)
+    , legend.box.margin = margin(-7,0,2,0)
+    , legend.text = element_text(size = 7, angle = 25, hjust = 0.7)
+    , legend.title = element_text(size = 7)
+    , axis.title = element_text(size = 7)
+    , plot.subtitle = element_text(size=9)
+  )
+
+# plot
+cowplot::plot_grid(
+  plotlist = list(plt_pts, plt_krig, plt_idw, plt_real)
+  , nrow = 2
+)
+
 ```
-
-
-```{r}
-#extract 500 points of elevation, randomly drawn
-#set.seed(2020)
-#srtm_pts=as.data.frame(spatSample(srtm, 500,method="random", xy=T))
-#colnames(srtm_pts)[3]="elevation"
-#head(srtm_pts)
-#plot(srtm)
-#plot(srtm_pts$x,srtm_pts$y)
-```
-
-
-```{r}
-#Create grid with intervals of 0.008333333 degree)
-#ext(srtm)
-#res(srtm)
-#e <- ext(srtm)
-#new.grid<- rast(e, resolution=res(srtm), val=1)
-#new.grid=as.data.frame(new.grid, xy=TRUE)
-#new.grid=new.grid[,1:2]
-```
-
 
  
