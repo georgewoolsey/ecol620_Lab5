@@ -44,6 +44,7 @@ library(kableExtra)
 library(ggtext)
 # spatial analysis
 library(terra)
+library(stars)
 library(pgirmess) #for simple correlograms
 library(ncf)  #for spline correlograms
 library(spdep)  #for general correlograms
@@ -94,10 +95,10 @@ Label the following semivariogram. (4 pts)
 
 ![](../data/semiv.png){width=50%}
 
-a. Nugget 
-b. Sill
+a. Nugget
+b. Range
 c. Partial Sill
-d. Range
+d. Sill
 
 ---
 
@@ -147,10 +148,12 @@ cactus_df <- read.csv('../data/cactus_matrix.csv', header=T)
       )
     )
 remove(cactus_morans_temp)
+#Maximum distance to consider in correlogram/variogram (~1/2 to 2/3 total dist)
+maxdist <- max(cactus_morans_full$dist.class)*(2/3)
 # plot
 ggplot(
     data = cactus_morans_full %>% 
-      dplyr::filter(dist.class <= max(cactus_morans_full$dist.class)*(2/3))
+      dplyr::filter(dist.class <= maxdist)
     , mapping = aes(x = dist.class, y = coef, group = method)
   ) +
   geom_hline(mapping = aes(yintercept = 0), color = "gray11", linetype = "dashed") +
@@ -176,22 +179,181 @@ ggplot(
 
 ```
 
+```{r, warning=FALSE, message=FALSE, echo=FALSE, include=FALSE}
+remove(list = ls()[grep("_temp",ls())])
+gc()
+```
+
 ## Question 5: Semivariogram
 
 Examine the empirical semivariogram created using gstat. Estimate the nugget, sill, and range. (3 pts) 
 
 ```{r}
+gstat_veg <- cactus_df
+sp::coordinates(gstat_veg) <- ~x + y
+#Empirical semivariogram
+empirical_gstat <- gstat::variogram(
+  object = Height ~ 1
+  , cutoff = maxdist
+  , width = 3
+  , data = gstat_veg
+  ) %>% 
+  dplyr::arrange(dist)
+# estimate nugget, sill, and range
+nugget_temp <- empirical_gstat$gamma[1] - 
+  (empirical_gstat$gamma[2]-empirical_gstat$gamma[1])
+sill_temp <- empirical_gstat %>% 
+    dplyr::mutate(
+      pct_ch = abs((gamma - dplyr::lag(gamma, 1))/dplyr::lag(gamma, 1))
+    ) %>% 
+    dplyr::filter(
+      pct_ch <= 0.02
+      & dplyr::lag(pct_ch, n = 1) <= 0.02
+      & dplyr::lead(pct_ch, n = 1) <= 0.02
+    ) %>% 
+    dplyr::filter(
+      dplyr::row_number()==1
+    ) %>% 
+    dplyr::pull(gamma)
+range_temp <- empirical_gstat %>% 
+  dplyr::filter(
+    dplyr::row_number()<which(empirical_gstat$gamma==sill_temp)
+  ) %>%
+  dplyr::mutate(
+    pct_sill = abs((gamma - sill_temp)/sill_temp)
+  ) %>% 
+  dplyr::arrange(
+    pct_sill
+  ) %>% 
+  dplyr::filter(
+    dplyr::row_number()==1
+  ) %>% 
+  dplyr::pull(dist)
+# plot
+ggplot( ) +
+  geom_point(data = empirical_gstat
+    , mapping = aes(x = dist, y = gamma)
+    , color = "gray33", size = 1.5
+  ) +
+  geom_point(mapping = aes(y = nugget_temp, x = 0, color = "nugget est."), size = 2, shape = 15) +
+  geom_segment(mapping = aes(
+    x = 0
+    , y = 0
+    , xend = 0
+    , yend = nugget_temp
+    , color = "nugget est."), size = 1.5
+  ) +
+  geom_segment(mapping = aes(
+    x = range_temp
+    , y = sill_temp
+    ,  xend = 0
+    , yend = sill_temp
+    , color = "range est."), size = 1.5
+  ) +
+  geom_segment(mapping = aes(
+    x = range_temp
+    , y = 0
+    , xend = range_temp
+    , yend = sill_temp
+    , color = "sill est."), size = 1.5
+  ) +
+  geom_text(mapping = aes(
+      y = nugget_temp, x = 0
+      , label = paste("nugget\n",round(nugget_temp,1))
+    )
+    , hjust = -0.2
+    , size = 3
+  ) +
+  geom_text(mapping = aes(
+      y = sill_temp*1.01, x = range_temp*.5
+      , label = paste0("range\n",round(range_temp,1))
+    )
+    , vjust = 0
+    , size = 3
+  ) +
+  geom_text(mapping = aes(
+      y = sill_temp*.5, x = range_temp
+      , label = paste0(" sill\n",round(sill_temp,0))
+    )
+    , hjust = -0.2
+    , size = 3
+  ) +
+  scale_y_continuous(
+    limits = c(0, max(empirical_gstat$gamma)*1.02)
+    , breaks = scales::extended_breaks(n=6)
+  ) + 
+  scale_x_continuous(limits = c(0, max(empirical_gstat$dist)*1.02)) +
+  scale_color_viridis_d() +
+  labs(
+    y = latex2exp::TeX("Semivariance  $\\hat{\\gamma}$")
+    , x = "Distance (m)"
+    , caption = "*visual estimates of nugget, range, and sill"
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "none"
+  )
 
 ```
+
+<span style="color: teal;">
+Based on the empirical semivariogram created using `gstat::variogram` and some "back of the napkin" math: the estimated nugget = **`r round(nugget_temp, 1)`**, the estimated range = **`r round(range_temp, 1)`**, and the estimated sill = **`r round(sill_temp, 1)`**.
+</span>
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE, include=FALSE}
+remove(list = ls()[grep("_temp",ls())])
+gc()
+```
+
 
 ## Question 6
 
 Do you see any cause for concern regarding anisotropy? (3 pts)
 
 ```{r}
-
+#Directional variogram in gstat
+empirical_gstat4 <- gstat::variogram(
+    object = Height ~ 1
+    , cutoff = maxdist
+    , alpha = c(0,45,90,135)
+    , gstat_veg
+  ) %>% 
+  dplyr::mutate(
+    dir_hor_lab = factor(
+      dir.hor
+      , ordered = T
+      , levels = c(0,45,90,135)
+      , labels = paste0(c(0,45,90,135), "\U00B0")
+      )
+  )
+# plot
+ggplot(data = empirical_gstat4
+    , mapping = aes(x = dist, y = gamma, color = dir_hor_lab)
+  ) +
+  geom_point(size = 1.5) +
+  geom_line(size = 1.5) +
+  scale_y_continuous(
+    limits = c(0, max(empirical_gstat4$gamma)*1.02)
+    , breaks = scales::extended_breaks(n=6)
+  ) + 
+  scale_x_continuous(limits = c(0, max(empirical_gstat4$dist)*1.02)) +
+  scale_color_viridis_d(option = "turbo",name="Direction") +
+  labs(
+    y = latex2exp::TeX("Semivariance  $\\hat{\\gamma}$")
+    , x = "Distance (m)"
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "bottom"
+  ) +
+  guides(
+    color = guide_legend(override.aes = list(size = 5, shape = ""))
+  )
 ```
 
+<span style="color: teal;">
+There *does not* appear to be strong differences between the variograms calculated for different directions and, therefore, there is no strong evidence for anisotropy in this data. In the variograms above, the data are subset to create variograms calculated for the 0°, 45°, 90°, 135° directions, where 0° covers the range from -22.5° to 22.5°, 45° covers 22.5° to 67.5°, etc. Ansiotropy occurs when spatial autocorrelation varies in different directions. Strong differences in these empirical variograms would suggest that anisotropy might be occurring in the data. 
+</span>
 
 ## Question 7
 
@@ -200,19 +362,187 @@ Plot the empirical and spherical theoretical semivariogram (through gstat). Add 
 Hint: the variogramLine() function is useful in extracting the theoretical values. 
 
 ```{r}
-#Use the following code to form the base of your plot:
-#ggplot()+
-#geom_point(data=emp.gstat, aes(x=dist, y=gamma, size=np))
+#theoretical semivariogram
+fit_vgram <- gstat::fit.variogram(empirical_gstat, gstat::vgm("Sph"))
+theoretical_gstat <- gstat::variogramLine(fit_vgram, maxdist = maxdist)
+# get the range sill and nugget
+range_temp <- sum(fit_vgram$range)
+nugget_temp <- fit_vgram$psill[1]
+sill_temp <- sum(fit_vgram$psill)
+# plot
+ggplot( ) +
+  geom_segment(mapping = aes(
+    x = range_temp
+    , y = sill_temp
+    ,  xend = 0
+    , yend = sill_temp
+    , color = "range"), size = 1.5
+  ) +
+  geom_segment(mapping = aes(
+    x = range_temp
+    , y = 0
+    , xend = range_temp
+    , yend = sill_temp
+    , color = "sill"), size = 1.5
+  ) +
+  geom_text(mapping = aes(
+      y = sill_temp*1.01, x = range_temp*.5
+      , label = paste0("range\n",round(range_temp,1))
+    )
+    , vjust = 0
+    , size = 3
+  ) +
+  geom_text(mapping = aes(
+      y = sill_temp*.5, x = range_temp
+      , label = paste0(" sill\n",round(sill_temp,0))
+    )
+    , hjust = -0.2
+    , size = 3
+  ) +
+  geom_point(data = empirical_gstat
+    , mapping = aes(x = dist, y = gamma, size = np)
+    , color = "gray33"
+  ) +
+  geom_line(data = theoretical_gstat
+    , mapping = aes(x = dist, y = gamma)
+    , color = "gray33", size = 1.2
+  ) +
+  geom_point(mapping = aes(y = nugget_temp, x = 0, color = "nugget"), size = 2, shape = 15) +
+  geom_segment(mapping = aes(
+    x = 0
+    , y = 0
+    , xend = 0
+    , yend = nugget_temp
+    , color = "nugget"), size = 1.5
+  ) +
+  geom_text(mapping = aes(
+      y = nugget_temp, x = 0
+      , label = paste("nugget\n",round(nugget_temp,1))
+    )
+    , hjust = -0.2
+    , size = 3
+  ) +
+  scale_y_continuous(
+    limits = c(0, max(empirical_gstat$gamma)*1.02)
+    , breaks = scales::extended_breaks(n=6)
+  ) + 
+  scale_x_continuous(limits = c(0, max(empirical_gstat$dist)*1.02)) +
+  scale_color_manual(
+    # nugget (blue), sill (green), and range (red)
+    values = c("navy", "firebrick", "forestgreen")
+  ) +
+  labs(
+    y = latex2exp::TeX("Semivariance  $\\hat{\\gamma}$")
+    , x = "Distance (m)"
+    , caption = "*theoretical estimates of nugget, range, and sill based on Spherical model"
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "none"
+  )
 ```
 
+<span style="color: teal;">
+Based on the theoretical semivariogram created using a Spherical model: the estimated nugget = **`r round(nugget_temp, 1)`**, the estimated range = **`r round(range_temp, 1)`**, and the estimated sill = **`r round(sill_temp, 1)`**.
+</span>
 
 ## Question 8 
 
 Contrast the use of inverse distance weighting interpolation and kriging (using either spherical or exponential). Which method yields a better interpolation? A visual assessment is fine at this stage. (4 pts)
 
-```{r}
+```{r, results='hide'}
+grid_1m <- expand.grid(
+  x = seq(from = 0, to = max(cactus_df$x), by = .5)
+  , y = seq(from = 0, to = max(cactus_df$y), by = .5)
+)
 
+#convert to sp object
+sp::gridded(grid_1m) = ~x + y
+# ordinary kriging
+krig_gstat <- gstat::krige(
+   formula = Height ~ 1
+   , locations = gstat_veg
+   , grid_1m
+   , model = fit_vgram
+)
+#Inverse distance weighting
+idw_gstat <- gstat::idw(
+  formula = Height ~ 1
+  , locations = gstat_veg
+  , grid_1m
+)
+# PLOT
+plt_krig <- krig_gstat %>% 
+  stars::st_as_stars() %>% 
+  as.data.frame(xy = TRUE) %>% 
+  dplyr::rename(pred = 3, var = 4) %>% 
+ggplot(.) +
+  geom_raster(mapping = aes(x=x, y=y, fill=pred)) +
+  scale_fill_viridis_c(option = "turbo") +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  labs(
+    subtitle = "Ordinary Kriging (Spherical model)"
+    , x = "x"
+    , y = "y"
+    , fill = "Veg. height (cm)"
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "bottom"
+    , legend.direction = "horizontal"
+    , legend.margin = margin(0,0,0,0)
+    , legend.box.margin = margin(-7,0,2,0)
+    , legend.text = element_text(size = 7, angle = 25, hjust = 0.7)
+    , legend.title = element_text(size = 7)
+    , axis.title = element_text(size = 7)
+    , axis.text.y = element_blank()
+    , axis.text.x = element_blank()
+    , panel.border = element_blank()
+    , plot.subtitle = element_text(size=9)
+  )
+
+plt_idw <- idw_gstat %>% 
+  stars::st_as_stars() %>% 
+  as.data.frame(xy = TRUE) %>% 
+  dplyr::rename(pred = 3, var = 4) %>% 
+ggplot(.) +
+  geom_raster(mapping = aes(x=x, y=y, fill=pred)) +
+  scale_fill_viridis_c(option = "turbo") +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  labs(
+    subtitle = "Inverse Distance Weighting"
+    , x = "x"
+    , y = "y"
+    , fill = "Veg. height (cm)"
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "bottom"
+    , legend.direction = "horizontal"
+    , legend.margin = margin(0,0,0,0)
+    , legend.box.margin = margin(-7,0,2,0)
+    , legend.text = element_text(size = 7, angle = 25, hjust = 0.7)
+    , legend.title = element_text(size = 7)
+    , axis.title = element_text(size = 7)
+    , axis.text.y = element_blank()
+    , axis.text.x = element_blank()
+    , panel.border = element_blank()
+    , plot.subtitle = element_text(size=9)
+  )
+  
+# plot
+cowplot::plot_grid(
+  plotlist =  list(plt_krig, plt_idw)
+  , nrow = 1
+)
 ```
+
+<span style="color: teal;">
+As shown above, the two spatial interpolation methods — inverse distance weighting and ordinary kriging using a spherical model — provide very similar predictions of vegetation height. The similar results were highly influenced by the dense, regular sample data collection and the approaches might exhibit less similarities in predictions given sparse and/or irregularly spaced sampling.
+</span>
+
 
 ---
 
