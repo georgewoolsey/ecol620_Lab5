@@ -982,3 +982,22 @@ cowplot::plot_grid(
 ```
 
  
+```{r, results='asis'}
+library(mapview) #Interactive maps
+library(leafpop) #map html popup
+library(USAboundaries)
+# basemap option
+mapview::mapviewOptions(homebutton = FALSE, basemaps = c("Esri.WorldImagery"))
+# mapview::mapviewOptions(homebutton = FALSE, basemaps = c("USGS.USImagery"))
+# map
+forests_temp <- USAboundaries::us_states(states = c("CO"))
+mapview::mapview(forests_temp
+        , color = "black"
+        , lwd = 2
+        , alpha.regions = 0
+        , label = FALSE
+        , legend = FALSE
+        , layer.name = "USFS Forests"
+  ) 
+```
+
